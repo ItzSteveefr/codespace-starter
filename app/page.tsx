@@ -34,7 +34,6 @@ export default function Home() {
   // Replace these with your actual values
   const GITHUB_TOKEN = process.env.NEXT_PUBLIC_GITHUB_TOKEN;
   const REPO_NAME = 'Fake-Text-Story';
-  const OWNER = 'ItzSteveefr';
 
   const checkCodespaceStatus = async (): Promise<void> => {
     try {
@@ -77,8 +76,8 @@ export default function Home() {
             setStatus('running');
             return;
           }
-        } catch (e) {
-          // Flask app not responding
+        } catch (error: unknown) {
+          console.error('Health check failed:', error);
           setStatus('app_not_running');
         }
       }
@@ -154,7 +153,7 @@ export default function Home() {
     checkCodespaceStatus();
     const interval = setInterval(checkCodespaceStatus, 30000);
     return () => clearInterval(interval);
-  }, []);
+  }, [checkCodespaceStatus]);
 
   const getStatusColor = (status: CodespaceStatus): string => {
     switch (status) {
