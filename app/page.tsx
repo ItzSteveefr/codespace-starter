@@ -28,6 +28,7 @@ export default function Home() {
   const [status, setStatus] = useState<CodespaceStatus>('checking');
   const [codespaceUrl, setCodespaceUrl] = useState<string>('');
   const [isStarting, setIsStarting] = useState<boolean>(false);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
   const [codespaceId, setCodespaceId] = useState<string>('');
   const FLASK_PORT = 8080;
   
@@ -36,13 +37,15 @@ export default function Home() {
   const REPO_NAME = 'Fake-Text-Story';
 
   const checkCodespaceStatus = async (): Promise<void> => {
+    setIsLoading(true);
     try {
       if (!GITHUB_TOKEN) {
+        console.log('No GitHub token found');
         setStatus('no_token');
         return;
       }
 
-      // First, get list of codespaces
+      console.log('Fetching codespaces...');
       const response = await fetch(
         `https://api.github.com/user/codespaces`,
         {
@@ -52,53 +55,67 @@ export default function Home() {
           }
         }
       );
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('GitHub API error:', response.status, errorText);
+        setStatus('error');
+        return;
+      }
       
       const codespaces: Codespace[] = await response.json();
+      console.log('Found codespaces:', codespaces.length);
+      
       const codespace = codespaces.find((cs: Codespace) => cs.repository.name === REPO_NAME);
       
       if (!codespace) {
+        console.log(`No codespace found for repo: ${REPO_NAME}`);
         setStatus('not_found');
         return;
       }
 
-      // Store codespace ID
+      console.log('Found codespace:', codespace.name, 'State:', codespace.state);
       setCodespaceId(codespace.id);
 
-      // Check if codespace is running
       if (codespace.state === 'running') {
         const url = `https://${codespace.name}-${FLASK_PORT}.app.github.dev`;
+        console.log('Checking health at URL:', url);
         setCodespaceUrl(url);
         
-        // Verify Flask app is responding
         try {
           const healthCheck = await fetch(`${url}/health`);
           if (healthCheck.ok) {
+            console.log('Health check passed');
             setStatus('running');
             return;
           }
+          console.log('Health check failed:', await healthCheck.text());
+          setStatus('app_not_running');
         } catch (error: unknown) {
-          console.error('Health check failed:', error);
+          console.error('Health check error:', error);
           setStatus('app_not_running');
         }
+      } else {
+        setStatus(codespace.state as CodespaceStatus);
       }
-      
-      setStatus(codespace.state as CodespaceStatus);
       
     } catch (error) {
       console.error('Error checking status:', error);
       setStatus('error');
+    } finally {
+      setIsLoading(false);
     }
   };
 
   const startCodespace = async (): Promise<void> => {
     try {
-      if (!codespaceId) {
-        throw new Error('No codespace ID available');
+      if (!codespaceId || !GITHUB_TOKEN) {
+        throw new Error('No codespace ID or GitHub token available');
       }
 
       setIsStarting(true);
       
-      // Start the codespace
+      console.log('Starting codespace:', codespaceId);
       const startResponse = await fetch(
         `https://api.github.com/user/codespaces/${codespaceId}/start`,
         {
@@ -111,18 +128,24 @@ export default function Home() {
       );
 
       if (!startResponse.ok) {
+        const errorText = await startResponse.text();
+        console.error('Start codespace error:', startResponse.status, errorText);
         throw new Error('Failed to start codespace');
       }
+
+      console.log('Codespace start command sent successfully');
 
       // Wait for codespace to be running
       let attempts = 0;
       while (attempts < 30) {
+        console.log(`Checking codespace status (attempt ${attempts + 1}/30)`);
         await new Promise(resolve => setTimeout(resolve, 2000));
         await checkCodespaceStatus();
         
         if (status === 'running') {
+          console.log('Codespace is running, starting Flask app');
           // Start Flask app
-          await fetch(
+          const consoleResponse = await fetch(
             `https://api.github.com/user/codespaces/${codespaceId}/console`,
             {
               method: 'POST',
@@ -136,9 +159,19 @@ export default function Home() {
               })
             }
           );
+
+          if (!consoleResponse.ok) {
+            console.error('Failed to start Flask app:', await consoleResponse.text());
+          } else {
+            console.log('Flask app start command sent successfully');
+          }
           break;
         }
         attempts++;
+      }
+      
+      if (attempts >= 30) {
+        throw new Error('Timeout waiting for codespace to start');
       }
       
     } catch (error) {
@@ -150,10 +183,14 @@ export default function Home() {
   };
 
   useEffect(() => {
-    checkCodespaceStatus();
-    const interval = setInterval(checkCodespaceStatus, 30000);
+    const checkStatus = async () => {
+      await checkCodespaceStatus();
+    };
+
+    checkStatus();
+    const interval = setInterval(checkStatus, 30000);
     return () => clearInterval(interval);
-  }, [checkCodespaceStatus]);
+  }, []);
 
   const getStatusColor = (status: CodespaceStatus): string => {
     switch (status) {
@@ -195,7 +232,11 @@ export default function Home() {
           Fake Text Story Control Panel
         </h1>
         
-        {!GITHUB_TOKEN ? (
+        {isLoading ? (
+          <div className="p-4 rounded-md mb-4 text-center bg-blue-100 text-blue-700">
+            Loading...
+          </div>
+        ) : !GITHUB_TOKEN ? (
           <div className="p-4 rounded-md mb-4 text-center bg-red-100 text-red-700">
             GitHub token not found. Please set NEXT_PUBLIC_GITHUB_TOKEN in your environment.
           </div>
